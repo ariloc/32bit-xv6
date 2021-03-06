@@ -10,6 +10,8 @@
 // Simplifed xv6 shell.
 
 #define MAXARGS 10
+#define MAXBUF 100
+#define PERMISSIONS 0666
 
 // All commands have at least a type. Have looked at the type, the code
 // typically casts the *cmd to some specific cmd type.
@@ -23,7 +25,7 @@ struct execcmd {
 };
 
 struct redircmd {
-  int type;          // < or > 
+  int type;          // < or >
   struct cmd *cmd;   // the command to be run (e.g., an execcmd)
   char *file;        // the input/output file
   int mode;          // the mode to open the file with
@@ -50,7 +52,7 @@ runcmd(struct cmd *cmd)
 
   if(cmd == 0)
     exit(0);
-  
+
   switch(cmd->type){
   default:
     fprintf(stderr, "unknown runcmd\n");
@@ -60,31 +62,52 @@ runcmd(struct cmd *cmd)
     ecmd = (struct execcmd*)cmd;
     if(ecmd->argv[0] == 0)
       exit(0);
-    fprintf(stderr, "exec not implemented\n");
-    // Your code here ...
+
+    if(execvp(ecmd->argv[0],ecmd->argv)) // execvp searches in PATH, returns -1 if it doesn't find it
+        fprintf(stderr,"%s not found\n",ecmd->argv[0]); // In such case, print an error message
+
     break;
 
   case '>':
   case '<':
     rcmd = (struct redircmd*)cmd;
-    fprintf(stderr, "redir not implemented\n");
-    // Your code here ...
-    runcmd(rcmd->cmd);
+
+    int stream = open(rcmd->file,rcmd->mode,PERMISSIONS); // Assign a file descriptor to the respective file
+    int stdOg = dup(fileno(rcmd->fd ? stdout : stdin)); // Keep the original file descriptor of stdout/stdin (depends on which way we redirect)
+    dup2(stream,fileno(rcmd->fd ? stdout : stdin)); // Redirect stdout/stdin to the file
+    runcmd(rcmd->cmd); // execvp will then read/write to/from the file
+    close(stream); // Close the file stream we created
+    dup2(stdOg,fileno(rcmd->fd ? stdout : stdin)); // Redirect back stdin/stdout
+
     break;
 
   case '|':
     pcmd = (struct pipecmd*)cmd;
-    fprintf(stderr, "pipe not implemented\n");
-    // Your code here ...
+
+    int fd[2]; // 0 is input, 1 is output (of instance)
+    int stat = pipe(fd); // Assign input/output of pipe
+
+    switch(fork1()) {
+    case 0: // Child
+        close(fd[0]); // We don't use the output stream in the child
+        dup2(fd[1],fileno(stdout)); // Redirect stdout to output of pipe (i.e. to parent's input)
+        runcmd(pcmd->left); // Runs excl, so no need to exit here (nor redirecting back stdout)
+
+    default: // Parent
+        close(fd[1]); // nor we use the input stream in the parent
+        dup2(fd[0],fileno(stdin)); // Redirect stdin to input of pipe (i.e. child's output)
+        runcmd(pcmd->right);
+    }
+
     break;
-  }    
+  }
   exit(0);
 }
 
 int
 getcmd(char *buf, int nbuf)
 {
-  
+
   if (isatty(fileno(stdin)))
     fprintf(stdout, "$ ");
   memset(buf, 0, nbuf);
@@ -97,7 +120,7 @@ getcmd(char *buf, int nbuf)
 int
 main(void)
 {
-  static char buf[100];
+  static char buf[MAXBUF];
   int fd, r;
 
   // Read and run input commands.
@@ -121,7 +144,7 @@ int
 fork1(void)
 {
   int pid;
-  
+
   pid = fork();
   if(pid == -1)
     perror("fork");
@@ -177,7 +200,7 @@ gettoken(char **ps, char *es, char **q, char **eq)
 {
   char *s;
   int ret;
-  
+
   s = *ps;
   while(s < es && strchr(whitespace, *s))
     s++;
@@ -202,7 +225,7 @@ gettoken(char **ps, char *es, char **q, char **eq)
   }
   if(eq)
     *eq = s;
-  
+
   while(s < es && strchr(whitespace, *s))
     s++;
   *ps = s;
@@ -213,7 +236,7 @@ int
 peek(char **ps, char *es, char *toks)
 {
   char *s;
-  
+
   s = *ps;
   while(s < es && strchr(whitespace, *s))
     s++;
@@ -227,7 +250,7 @@ struct cmd *parseexec(char**, char*);
 
 // make a copy of the characters in the input buffer, starting from s through es.
 // null-terminate the copy to make it a string.
-char 
+char
 *mkcopy(char *s, char *es)
 {
   int n = es - s;
@@ -306,7 +329,7 @@ parseexec(char **ps, char *es)
   int tok, argc;
   struct execcmd *cmd;
   struct cmd *ret;
-  
+
   ret = execcmd();
   cmd = (struct execcmd*)ret;
 
